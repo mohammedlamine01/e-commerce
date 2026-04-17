@@ -4,6 +4,7 @@ const { Readable } = require("stream");
 const cors = require("cors");
 const multer = require("multer");
 const ftp = require("basic-ftp");
+const { db } = require("./firebase");
 
 require("dotenv").config();
 
@@ -17,7 +18,7 @@ const ftpConfig = {
   user: process.env.FTP_USER || "if0_41673431",
   password: process.env.FTP_PASSWORD || "BGJ0CzDFK08KH",
   remoteDir: process.env.FTP_REMOTE_DIR || "/htdocs/uploads",
-  publicBaseUrl: process.env.FTP_PUBLIC_BASE_URL || "",
+  publicBaseUrl: process.env.FTP_PUBLIC_BASE_URL || "https://shelegant.ct.ws/uploads",
 };
 
 function buildSafeFileName(originalName) {
@@ -47,6 +48,27 @@ async function uploadToFtp(buffer, remoteFileName) {
   }
 }
 
+async function deleteFromFtp(remoteFileName) {
+  const client = new ftp.Client(15000);
+
+  try {
+    await client.access({
+      host: ftpConfig.host,
+      port: ftpConfig.port,
+      user: ftpConfig.user,
+      password: ftpConfig.password,
+      secure: false,
+    });
+
+    const remotePath = `${ftpConfig.remoteDir.replace(/\/$/, "")}/${remoteFileName}`;
+    await client.remove(remotePath);
+  } catch (error) {
+    console.error(`Failed to delete ${remoteFileName} from FTP:`, error.message);
+  } finally {
+    client.close();
+  }
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -71,9 +93,28 @@ app.get("/upload-test.html", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "upload-test.html"));
 });
 
+app.get("/add-product", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "add-product.html"));
+});
+
 // Test route
 app.get("/", (req, res) => {
   res.send('Hello from Express server. Open <a href="/upload-test.html">/upload-test.html</a> to test FTP image upload.');
+});
+
+app.delete("/delete-image", async (req, res, next) => {
+  const { filename } = req.body;
+  
+  if (!filename) {
+    return res.status(400).json({ error: "Filename is required" });
+  }
+
+  try {
+    await deleteFromFtp(filename);
+    res.json({ message: "Image deleted from FTP successfully." });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/upload-image", upload.single("image"), async (req, res, next) => {
@@ -93,6 +134,48 @@ app.post("/upload-image", upload.single("image"), async (req, res, next) => {
       filename,
       remotePath: `${ftpConfig.remoteDir}/${filename}`,
       imageUrl,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/add-product", upload.single("image"), async (req, res, next) => {
+  const { name, price } = req.body;
+
+  if (!name || !price || !req.file) {
+    return res
+      .status(400)
+      .json({ error: "Missing name, price, or image file." });
+  }
+
+  try {
+    const filename = buildSafeFileName(req.file.originalname);
+    await uploadToFtp(req.file.buffer, filename);
+
+    const baseUrl = ftpConfig.publicBaseUrl.replace(/\/$/, "");
+    const imageUrl = baseUrl ? `${baseUrl}/${filename}` : null;
+
+    if (!imageUrl) {
+      return res.status(400).json({
+        error:
+          "Image uploaded, but FTP_PUBLIC_BASE_URL is not set, so the product cannot be saved.",
+      });
+    }
+
+    const productData = {
+      name,
+      price: parseFloat(price),
+      imageUrl,
+      createdAt: new Date(),
+    };
+
+    const docRef = await db.collection("products").add(productData);
+
+    res.status(201).json({
+      message: "Product added successfully!",
+      productId: docRef.id,
+      data: productData,
     });
   } catch (error) {
     next(error);

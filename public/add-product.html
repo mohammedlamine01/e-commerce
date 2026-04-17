@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Product</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Add a New Product</h1>
+    <form id="add-product-form">
+        <div>
+            <label for="name">Product Name:</label>
+            <input type="text" id="name" name="name" required>
+        </div>
+        <div>
+            <label for="price">Price:</label>
+            <input type="number" id="price" name="price" step="0.01" required>
+        </div>
+        <div>
+            <label for="image">Product Image:</label>
+            <input type="file" id="image" name="image" accept="image/*" required>
+        </div>
+        <button type="submit">Add Product</button>
+    </form>
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('add-product-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const form = e.target;
+            const formData = new FormData(form);
+            const resultDiv = document.getElementById('result');
+
+            resultDiv.innerHTML = 'Adding product...';
+
+            try {
+                const response = await fetch('/add-product', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || `HTTP error! status: ${response.status}`);
+                }
+
+                resultDiv.innerHTML = `
+                    <p>${result.message}</p>
+                    <p>Product ID: ${result.productId}</p>
+                    <div>
+                        <strong>${result.data.name}</strong> - $${result.data.price}
+                        <br>
+                        <img src="${result.data.imageUrl}" alt="${result.data.name}" style="max-width: 200px; margin-top: 10px;">
+                    </div>
+                `;
+                form.reset();
+            } catch (error) {
+                console.error('Error adding product:', error);
+                resultDiv.innerHTML = `<p>Error adding product: ${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>
