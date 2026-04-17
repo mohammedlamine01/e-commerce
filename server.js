@@ -1,10 +1,8 @@
 import express from "express";
 import path from "path";
-import { Readable } from "stream";
 import cors from "cors";
 import multer from "multer";
-import ftp from "basic-ftp";
-import { db } from "./firebase.js";
+import { db, bucket } from "./firebase.js";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 
@@ -15,63 +13,34 @@ dotenv.config();
 
 const app = express();
 
-const PORT = 3000;
-
-const ftpConfig = {
-  host: process.env.FTP_HOST || "ftpupload.net",
-  port: Number(process.env.FTP_PORT || 21),
-  user: process.env.FTP_USER || "if0_41673431",
-  password: process.env.FTP_PASSWORD || "BGJ0CzDFK08KH",
-  remoteDir: process.env.FTP_REMOTE_DIR || "/htdocs/uploads",
-  publicBaseUrl: process.env.FTP_PUBLIC_BASE_URL || "https://shelegant.ct.ws/uploads",
-};
+const PORT = process.env.PORT || 3000;
 
 function buildSafeFileName(originalName) {
   const ext = path.extname(originalName) || ".jpg";
   const baseName = path
     .basename(originalName, ext)
     .replace(/[^a-zA-Z0-9_-]/g, "-");
-  return `${Date.now()}-${baseName}${ext}`;
+  return `uploads/${Date.now()}-${baseName}${ext}`;
 }
 
-async function uploadToFtp(buffer, remoteFileName) {
-  const client = new ftp.Client(15000);
-
-  try {
-    await client.access({
-      host: ftpConfig.host,
-      port: ftpConfig.port,
-      user: ftpConfig.user,
-      password: ftpConfig.password,
-      secure: false,
-    });
-
-    await client.ensureDir(ftpConfig.remoteDir);
-    await client.uploadFrom(Readable.from(buffer), remoteFileName);
-  } finally {
-    client.close();
-  }
+async function uploadToStorage(buffer, mimetype, remoteFileName) {
+  if (!bucket) throw new Error("Firebase Storage bucket is not initialized.");
+  const file = bucket.file(remoteFileName);
+  
+  await file.save(buffer, {
+    metadata: { contentType: mimetype },
+  });
+  
+  // Make the file publicly accessible
+  await file.makePublic();
+  
+  return `https://storage.googleapis.com/${bucket.name}/${remoteFileName}`;
 }
 
-async function deleteFromFtp(remoteFileName) {
-  const client = new ftp.Client(15000);
-
-  try {
-    await client.access({
-      host: ftpConfig.host,
-      port: ftpConfig.port,
-      user: ftpConfig.user,
-      password: ftpConfig.password,
-      secure: false,
-    });
-
-    const remotePath = `${ftpConfig.remoteDir.replace(/\/$/, "")}/${remoteFileName}`;
-    await client.remove(remotePath);
-  } catch (error) {
-    console.error(`Failed to delete ${remoteFileName} from FTP:`, error.message);
-  } finally {
-    client.close();
-  }
+async function deleteFromStorage(remoteFileName) {
+  if (!bucket) throw new Error("Firebase Storage bucket is not initialized.");
+  const file = bucket.file(remoteFileName);
+  await file.delete();
 }
 
 const upload = multer({
@@ -104,7 +73,7 @@ app.get("/add-product", (req, res) => {
 
 // Test route
 app.get("/", (req, res) => {
-  res.send('Hello from Express server. Open <a href="/upload-test.html">/upload-test.html</a> to test FTP image upload.');
+  res.send('Hello from Express server. Open <a href="/upload-test.html">/upload-test.html</a> to test image upload.');
 });
 
 app.delete("/delete-image", async (req, res, next) => {
@@ -115,8 +84,8 @@ app.delete("/delete-image", async (req, res, next) => {
   }
 
   try {
-    await deleteFromFtp(filename);
-    res.json({ message: "Image deleted from FTP successfully." });
+    await deleteFromStorage(filename);
+    res.json({ message: "Image deleted from Firebase Storage successfully." });
   } catch (error) {
     next(error);
   }
@@ -129,15 +98,11 @@ app.post("/upload-image", upload.single("image"), async (req, res, next) => {
 
   try {
     const filename = buildSafeFileName(req.file.originalname || "image.jpg");
-    await uploadToFtp(req.file.buffer, filename);
-
-    const baseUrl = ftpConfig.publicBaseUrl.replace(/\/$/, "");
-    const imageUrl = baseUrl ? `${baseUrl}/${filename}` : null;
+    const imageUrl = await uploadToStorage(req.file.buffer, req.file.mimetype, filename);
 
     res.json({
-      message: "Image uploaded to FTP successfully.",
+      message: "Image uploaded successfully.",
       filename,
-      remotePath: `${ftpConfig.remoteDir}/${filename}`,
       imageUrl,
     });
   } catch (error) {
@@ -156,17 +121,7 @@ app.post("/add-product", upload.single("image"), async (req, res, next) => {
 
   try {
     const filename = buildSafeFileName(req.file.originalname);
-    await uploadToFtp(req.file.buffer, filename);
-
-    const baseUrl = ftpConfig.publicBaseUrl.replace(/\/$/, "");
-    const imageUrl = baseUrl ? `${baseUrl}/${filename}` : null;
-
-    if (!imageUrl) {
-      return res.status(400).json({
-        error:
-          "Image uploaded, but FTP_PUBLIC_BASE_URL is not set, so the product cannot be saved.",
-      });
-    }
+    const imageUrl = await uploadToStorage(req.file.buffer, req.file.mimetype, filename);
 
     const productData = {
       name,
@@ -193,7 +148,8 @@ app.use((err, req, res, next) => {
   }
 
   if (err) {
-    return res.status(400).json({ error: err.message || "Upload failed." });
+    console.error("Server Error:", err);
+    return res.status(500).json({ error: err.message || "Upload failed." });
   }
 
   next();
