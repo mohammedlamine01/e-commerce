@@ -1,12 +1,17 @@
-const express = require("express");
-const path = require("path");
-const { Readable } = require("stream");
-const cors = require("cors");
-const multer = require("multer");
-const ftp = require("basic-ftp");
-const { db } = require("./firebase");
+import express from "express";
+import path from "path";
+import { Readable } from "stream";
+import cors from "cors";
+import multer from "multer";
+import ftp from "basic-ftp";
+import { db } from "./firebase.js";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 
-require("dotenv").config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config();
 
 const app = express();
 

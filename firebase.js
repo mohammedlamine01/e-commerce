@@ -1,7 +1,13 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, addDoc } from "firebase/firestore";
-const admin = require("firebase-admin");
-const path = require("path");
+import admin from "firebase-admin";
+import path from "path";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const firebaseConfig = {
   apiKey: "AIzaSyAoCIHBSwBpre2kfyF8teTKkRdRZyeLl9E",
@@ -13,10 +19,12 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const clientDb = getFirestore(app);
 
 // Path to your service account key file
 const serviceAccountPath = path.join(__dirname, "serviceAccountKey.json");
+
+let adminDb;
 
 try {
   const serviceAccount = require(serviceAccountPath);
@@ -25,24 +33,23 @@ try {
     credential: admin.credential.cert(serviceAccount),
   });
 
-  const db = admin.firestore();
+  adminDb = admin.firestore();
   console.log("Firebase Admin SDK initialized successfully.");
 
-  module.exports = { db };
 } catch (error) {
   console.error(
     "Error initializing Firebase Admin SDK. Make sure 'serviceAccountKey.json' exists and is valid.",
     error.message
   );
   // Provide a mock db object in case of an error to avoid crashing the app
-  module.exports = {
-    db: {
-      collection: () => ({
-        add: () =>
-          Promise.reject(
-            new Error("Firestore is not initialized. Check your configuration.")
-          ),
-      }),
-    },
+  adminDb = {
+    collection: () => ({
+      add: () =>
+        Promise.reject(
+          new Error("Firestore is not initialized. Check your configuration.")
+        ),
+    }),
   };
 }
+
+export { adminDb as db };
